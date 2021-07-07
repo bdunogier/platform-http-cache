@@ -14,6 +14,8 @@ use eZ\Publish\Core\MVC\ConfigResolverInterface;
 
 class InvalidateTokenController
 {
+    public const TOKEN_HEADER_NAME = 'X-Invalidate-Token';
+
     /**
      * @var \eZ\Publish\Core\MVC\ConfigResolverInterface
      */
@@ -66,23 +68,28 @@ class InvalidateTokenController
     {
         $response = new Response();
 
-        if (!$this->isFromTrustedProxy($request)) {
-            $response->setStatusCode('401', 'Unauthorized');
-
-            return $response;
-        }
-
         // Important to keep this condition, as .vcl rely on this to prevent everyone from being able to fetch the token.
         if ($request->headers->get('accept') !== 'application/vnd.ezplatform.invalidate-token') {
-            $response->setStatusCode('400', 'Bad request');
+            $response->setStatusCode(400, 'Bad request');
 
             return $response;
         }
+
         $this->tagHandler->addTags(['ez-invalidate-token']);
+
+        $token = $this->configResolver->getParameter('http_cache.varnish_invalidate_token');
+        // PHP send PURGE with configured token included
+        // -> Varnish validate it by sending `/_ez_http_invalidatetoken` with the same token header included
+        // -> PHP validate tokens match (and return token to make it cached on Varnish)
+        if ($request->headers->get(self::TOKEN_HEADER_NAME) !== $token) {
+            $response->setStatusCode(401, 'Unauthorized');
+
+            return $response;
+        }
 
         $headers = $response->headers;
         $headers->set('Content-Type', 'application/vnd.ezplatform.invalidate-token');
-        $headers->set('X-Invalidate-Token', $this->configResolver->getParameter('http_cache.varnish_invalidate_token'));
+        $headers->set(self::TOKEN_HEADER_NAME, $token);
         $response->setSharedMaxAge($this->ttl);
         $response->setVary('Accept', true);
 
